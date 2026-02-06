@@ -6,19 +6,12 @@ from ultralytics import YOLO
 # ⚙️ USER CONFIGURATION
 # ==============================================================================
 CONFIG = {
-    # PATHS
-    "video_path": "videos/canteen.mp4",
+    "video_path": "videos/cantee.mp4",
     "model_path": "runs/detect/aiv6s1/weights/best.pt",
-    
-    # WINDOW
     "window_name": "YOLOv8 Player",
-    "window_width": 1280,  # Force window size
-    
-    # DETECTION PARAMETERS
-    "conf": 0.50,          # Confidence Threshold (0.0 - 1.0)
-    "iou": 0.45,           # NMS IoU Threshold (0.0 - 1.0)
-    "imgsz": 640,          # Inference Size
-    "classes": None,       # Set to [0] to detect only people, or None for all
+    "conf_threshold": 0.50,
+    "iou_threshold": 0.45,
+    "imgsz": 640,
 }
 
 # ==============================================================================
@@ -29,35 +22,41 @@ def main():
     try:
         model = YOLO(CONFIG['model_path'])
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(f"❌ Error: {e}")
         return
 
     print(f"📂 Opening Video: {CONFIG['video_path']}...")
     cap = cv2.VideoCapture(CONFIG['video_path'])
     if not cap.isOpened():
-        print(f"❌ Error: Could not open {CONFIG['video_path']}")
+        print("❌ Error: Could not open video.")
         return
 
-    # 1. Setup Playback Physics
+    # --- 1. SYNC PHYSICS (Copied from working code) ---
     orig_fps = cap.get(cv2.CAP_PROP_FPS)
     if orig_fps == 0 or np.isnan(orig_fps): orig_fps = 30
+    realtime_delay = int(1000 / orig_fps)
+    current_delay = realtime_delay
+
+    # --- 2. RESOLUTION SETUP ---
+    # We maintain aspect ratio but define a fixed display width
+    target_width = 1280
+    video_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    video_h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    aspect_ratio = video_h / video_w
     
-    realtime_delay = int(1000 / orig_fps) # Standard delay for 1.0x speed
-    current_delay = realtime_delay        # Current delay (adjustable)
+    display_width = target_width
+    display_height = int(display_width * aspect_ratio)
 
-    # 2. Setup Window (Linux Friendly)
-    # We calculate height to keep aspect ratio
-    aspect_ratio = cap.get(cv2.CAP_PROP_FRAME_HEIGHT) / cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    window_h = int(CONFIG['window_width'] * aspect_ratio)
-
+    # --- 3. EXPLICIT WINDOW INITIALIZATION (Critical Fix) ---
+    # This specific sequence matches your working code to ensure the GUI backend loads
     cv2.namedWindow(CONFIG['window_name'], cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(CONFIG['window_name'], CONFIG['window_width'], window_h)
+    cv2.resizeWindow(CONFIG['window_name'], display_width, display_height)
 
     print("-" * 40)
     print("🎮 CONTROLS:")
     print("   [SPACE] : Pause / Resume")
-    print("   [W]     : Speed UP")
-    print("   [S]     : Speed DOWN")
+    print("   [W]     : Speed UP (Lower delay)")
+    print("   [S]     : Speed DOWN (Higher delay)")
     print("   [R]     : Reset Speed")
     print("   [Q]     : Quit")
     print("-" * 40)
@@ -65,16 +64,16 @@ def main():
     paused = False
 
     while True:
-        # A. Check if Window was closed manually (The 'X' button)
+        # Check if window is closed
         try:
-            if cv2.getWindowProperty(CONFIG['window_name'], cv2.WND_PROP_VISIBLE) < 1:
+            if cv2.getWindowProperty(CONFIG['window_name'], cv2.WND_PROP_VISIBLE) < 1: 
                 break
-        except:
+        except: 
             break
 
-        # B. Handle Pause State
+        # --- PAUSE LOGIC ---
         if paused:
-            # Wait 100ms repeatedly for a key press
+            # Wait for Space to resume or Q to quit
             key = cv2.waitKey(100) & 0xFF
             if key == ord(' '): 
                 paused = not paused
@@ -83,35 +82,38 @@ def main():
                 break
             continue
 
-        # C. Read Frame
+        # --- READ FRAME ---
         ret, frame = cap.read()
         if not ret:
             print("✅ Video Finished.")
             break
 
-        # D. Run Detection (Simple Inference)
+        # --- INFERENCE ---
+        # Using .predict() as requested for pure detection
         results = model.predict(
-            frame, 
-            conf=CONFIG['conf'], 
-            iou=CONFIG['iou'], 
+            frame,
+            conf=CONFIG['conf_threshold'],
+            iou=CONFIG['iou_threshold'],
             imgsz=CONFIG['imgsz'],
-            classes=CONFIG['classes'],
             verbose=False
         )
 
-        # E. Draw Results
-        # .plot() draws the boxes on the frame for us
+        # --- DRAWING ---
+        # Plotting directly ensures we get the built-in labels/colors
         annotated_frame = results[0].plot()
 
-        # Optional: Draw Speed Info
-        speed_x = round(realtime_delay / max(1, current_delay), 1)
-        cv2.putText(annotated_frame, f"Speed: {speed_x}x", (20, 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Resize for display (Optional, but keeps window manageable)
+        display_frame = cv2.resize(annotated_frame, (display_width, display_height))
 
-        # F. Show Frame
-        cv2.imshow(CONFIG['window_name'], annotated_frame)
+        # Add Speed Overlay
+        speed_x = round(realtime_delay / max(1, current_delay), 1)
+        cv2.putText(display_frame, f"Speed: {speed_x}x", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+        # --- SHOW FRAME ---
+        cv2.imshow(CONFIG['window_name'], display_frame)
         
-        # G. Handle Keyboard Input
+        # --- KEY HANDLING ---
         key = cv2.waitKey(current_delay) & 0xFF
 
         if key == ord('q'): 
@@ -119,9 +121,9 @@ def main():
         elif key == ord(' '): 
             paused = not paused
             print("II Paused")
-        elif key == ord('w'): # Speed UP (Lower delay)
+        elif key == ord('w'): # Speed UP
             current_delay = max(1, current_delay - 5)
-        elif key == ord('s'): # Speed DOWN (Higher delay)
+        elif key == ord('s'): # Speed DOWN
             current_delay += 5
         elif key == ord('r'): # Reset
             current_delay = realtime_delay
