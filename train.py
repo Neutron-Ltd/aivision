@@ -16,7 +16,7 @@ def main():
     # 1. Initialize Model
     # We use 'Medium' (m). It is the sweet spot for 1500+ images.
     # If your GPU runs out of memory, switch to 'yolov8s.pt'.
-    model = YOLO('models/yolov8m.pt') 
+    model = YOLO('models/yolov8n.pt') 
 
     # 2. The "Purist" Training Configuration
     results = model.train(
@@ -24,10 +24,10 @@ def main():
         
         # --- TRAINING DYNAMICS ---
         epochs=300,               # Long training because we turned off aggressive augmentation
-        patience=0,              # Stop if no improvement for 50 epochs
+        patience=50,              # Stop if no improvement for 50 epochs
         imgsz=640,                # Standard resolution
-        batch=16,                 # Lower this to 8 or 4 if you get "Out of Memory" errors
-        name='aiv6s1',       # Output folder name
+        batch=64,                 # Lower this to 8 or 4 if you get "Out of Memory" errors
+        name='aiv6s2',       # Output folder name
         workers=8,                
         device=device,            
         cache=True,               # Loads images into RAM for speed
