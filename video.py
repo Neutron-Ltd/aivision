@@ -1,183 +1,160 @@
 import time
 import cv2
-import numpy as np
+import logging
 from ultralytics import YOLO
-from flask import Flask, Response
+from flask import Flask, Response, render_template_string
 from threading import Thread
 
 # ==============================================================================
 # ⚙️ USER CONFIGURATION
 # ==============================================================================
 CONFIG = {
-    # INPUT: Your Canteen Video (Looping)
     "video_path": "videos/canteen.mp4",
-    
-    # MODEL: Your Custom Top-Down Model
     "model_path": "runs/detect/aiv6s1/weights/best.pt",
     
-    "conf_threshold": 0.50,
-    "classes_to_track": [0], # 0 is standard for 'person' in YOLO
-    
-    # ZONES (Generic Setup for Testing)
-    # You can adjust these coordinates (0.0 - 1.0) later
-    "outer_zone": np.array([
-        [0.1, 0.1], [0.9, 0.1], 
-        [0.9, 0.9], [0.1, 0.9]
-    ], np.float32),
-
-    "inner_zone": np.array([
-        [0.3, 0.3], [0.7, 0.3], 
-        [0.7, 0.7], [0.3, 0.7]
-    ], np.float32)
+    # Detection Parameters
+    "conf": 0.50,
+    "iou": 0.45,
+    "imgsz": 640,
 }
 
 # ==============================================================================
-# 🧠 TRACKING LOGIC (Simple Zone Check)
+# 🎮 GLOBAL PLAYER STATE
 # ==============================================================================
-class SafetySystem:
+class PlayerState:
     def __init__(self):
-        self.enter_count = 0
-        self.exit_count = 0
-        self.is_inside_map = {} 
+        self.paused = False
+        self.speed_multiplier = 1.0  # 1.0 = Normal, 0.5 = Slow, 2.0 = Fast
+        self.frame = None
 
-    def update_batch(self, ids, centers, inner_poly, outer_poly):
-        if len(ids) == 0: return []
-
-        # Check if points are inside polygons
-        in_inner = [cv2.pointPolygonTest(inner_poly, tuple(map(int, c)), False) >= 0 for c in centers]
-        in_outer = [cv2.pointPolygonTest(outer_poly, tuple(map(int, c)), False) >= 0 for c in centers]
-
-        status_list = []
-        for i, obj_id in enumerate(ids):
-            prev = self.is_inside_map.get(obj_id, False)
-            curr = prev
-
-            # Logic: Enter if in inner, Exit if left outer
-            if not prev:
-                if in_inner[i]: 
-                    curr = True
-                    self.enter_count += 1
-            else:
-                if not in_outer[i]: 
-                    curr = False
-                    self.exit_count += 1
-            
-            self.is_inside_map[obj_id] = curr
-            status_list.append(curr)
-        
-        return status_list
-
-    def get_stats(self):
-        return self.enter_count, self.exit_count
+state = PlayerState()
 
 # ==============================================================================
-# 🖥️ MAIN WEB SERVER
+# 🖥️ FLASK APP & CONTROLS
 # ==============================================================================
-to_web_frame = None
+app = Flask(__name__)
 
-def main():
-    global to_web_frame
+# Minimal HTML Interface for Controls
+HTML_TEMPLATE = """
+<html>
+<head>
+    <title>YOLOv8 Web Player</title>
+    <style>
+        body { background-color: #1e1e1e; color: white; font-family: sans-serif; text-align: center; }
+        img { border: 2px solid #333; max-width: 90%; height: auto; margin-top: 20px; }
+        .controls { margin-top: 20px; }
+        button { padding: 10px 20px; font-size: 16px; margin: 0 10px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; }
+        button:hover { background: #666; }
+        .active { background: #007bff; }
+    </style>
+    <script>
+        function sendCmd(cmd) { fetch('/' + cmd); }
+    </script>
+</head>
+<body>
+    <h1>YOLOv8 Detection Player</h1>
+    <img src="/video_feed">
+    <div class="controls">
+        <button onclick="sendCmd('slower')">⏪ Slower</button>
+        <button onclick="sendCmd('pause')">⏯ Pause/Resume</button>
+        <button onclick="sendCmd('faster')">⏩ Faster</button>
+    </div>
+</body>
+</html>
+"""
 
-    print(f"🚀 Loading Model: {CONFIG['model_path']}...")
-    try:
-        model = YOLO(CONFIG['model_path'])
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        return
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
 
-    # --- FLASK SETUP ---
-    app = Flask(__name__)
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-    @app.route("/", methods=["GET"])
-    def stream():
-        return Response(generate_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+# --- CONTROL ENDPOINTS ---
+@app.route('/pause')
+def pause():
+    state.paused = not state.paused
+    return "OK"
 
-    def generate_stream():
-        while True:
-            if to_web_frame is not None:
-                # Encode frame to JPEG for browser
-                ret, buffer = cv2.imencode('.jpg', to_web_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-                if ret:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.03) # Cap at ~30 FPS stream
+@app.route('/faster')
+def faster():
+    state.speed_multiplier = min(state.speed_multiplier + 0.5, 5.0)
+    return "OK"
 
-    # Start Flask in background thread
-    print("🌐 Starting Web Server...")
-    Thread(target=app.run, kwargs={"host": "0.0.0.0", "port": 8891, "debug": False}, daemon=True).start()
+@app.route('/slower')
+def slower():
+    state.speed_multiplier = max(state.speed_multiplier - 0.5, 0.1)
+    return "OK"
 
-    # --- VIDEO LOOP ---
+# ==============================================================================
+# 🧠 VIDEO PROCESSING LOOP
+# ==============================================================================
+def generate_frames():
+    # 1. Load Model
+    print(f"🚀 Loading Model: {CONFIG['model_path']}")
+    model = YOLO(CONFIG['model_path'])
+
+    # 2. Open Video
     print(f"📂 Opening Video: {CONFIG['video_path']}")
     cap = cv2.VideoCapture(CONFIG['video_path'])
     
-    # Calculate Resolution
-    width = 1280
-    orig_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    orig_h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    if orig_w == 0: orig_w = 1280 # Fallback
-    aspect = orig_h / orig_w
-    height = int(width * aspect)
-    
-    # Prepare Zones
-    outer_pts = (CONFIG['outer_zone'] * [width, height]).astype(np.int32)
-    inner_pts = (CONFIG['inner_zone'] * [width, height]).astype(np.int32)
-
-    safety_sys = SafetySystem()
-
-    print("\n✅ STREAM RUNNING: http://localhost:8891 (or your server IP)")
-    print("ℹ️  Use 'Ctrl+C' to stop.")
+    # Calculate Base Delay (Physics)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0: fps = 30
+    base_delay = 1.0 / fps
 
     while True:
+        # A. PAUSE LOGIC
+        if state.paused:
+            # If paused, keep sending the LAST frame so the image doesn't break
+            if state.frame is not None:
+                yield state.frame
+            time.sleep(0.1)
+            continue
+
+        # B. READ FRAME
         ret, frame = cap.read()
         if not ret:
-            # Loop video
+            print("✅ Video Finished. Looping...")
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        frame = cv2.resize(frame, (width, height))
+        # C. INFERENCE
+        results = model.predict(
+            frame, 
+            conf=CONFIG['conf'], 
+            iou=CONFIG['iou'], 
+            imgsz=CONFIG['imgsz'],
+            verbose=False
+        )
 
-        # --- GRID (Visual Helper) ---
-        # Draws faint lines at 10%, 20%, etc.
-        for i in range(1, 10):
-            x, y = int(width * i/10), int(height * i/10)
-            cv2.line(frame, (x, 0), (x, height), (50, 50, 50), 1)
-            cv2.line(frame, (0, y), (width, y), (50, 50, 50), 1)
+        # D. DRAWING
+        annotated_frame = results[0].plot()
 
-        # --- INFERENCE ---
-        results = model.track(frame, persist=True, conf=CONFIG['conf_threshold'], 
-                              classes=CONFIG['classes_to_track'], verbose=False)
-        
-        # Draw Zones
-        cv2.polylines(frame, [outer_pts], True, (0, 255, 0), 2)
-        cv2.polylines(frame, [inner_pts], True, (0, 255, 255), 2)
+        # Add HUD (Speed Status)
+        cv2.putText(annotated_frame, f"Speed: {state.speed_multiplier}x", (20, 40), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        current_active = 0
+        # E. ENCODE FOR WEB
+        ret, buffer = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+        if ret:
+            state.frame = (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            yield state.frame
 
-        # --- LOGIC ---
-        if results[0].boxes.id is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            track_ids = results[0].boxes.id.int().cpu().numpy()
-            centers = np.column_stack(((boxes[:,0]+boxes[:,2])/2, (boxes[:,1]+boxes[:,3])/2)).astype(int)
-
-            active_states = safety_sys.update_batch(track_ids, centers, inner_pts, outer_pts)
-
-            for box, obj_id, is_active, center in zip(boxes, track_ids, active_states, centers):
-                x1, y1, x2, y2 = map(int, box)
-                color = (0, 0, 255) if is_active else (0, 255, 0)
-                if is_active: current_active += 1
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"ID:{obj_id}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-        # --- HUD ---
-        enter_c, exit_c = safety_sys.get_stats()
-        cv2.putText(frame, f"ENTER: {enter_c} | EXIT: {exit_c} | ACTIVE: {current_active}", 
-                    (50, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-        # Update global frame for Flask
-        to_web_frame = frame
-
-    cap.release()
+        # F. SPEED CONTROL (Sleep logic)
+        # Higher multiplier = Less sleep = Faster
+        # Lower multiplier = More sleep = Slower
+        time.sleep(base_delay / state.speed_multiplier)
 
 if __name__ == "__main__":
-    main()
+    # Disable Flask logs to keep terminal clean
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    print("\n✅ PLAYER READY!")
+    print("   👉 Open this URL in your browser: http://localhost:8890")
+    print("   (Or use your server IP: http://<server_ip>:8890)\n")
+    
+    app.run(host='0.0.0.0', port=8890, threaded=True)
