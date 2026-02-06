@@ -3,7 +3,7 @@ from rknn.api import RKNN
 
 # CONFIG PATHS
 ONNX_MODEL = 'runs/detect/aiv6s2/weights/best.onnx'  # Your Nano model
-RKNN_MODEL = 'model.rknn'
+RKNN_MODEL = 'aiv6s2.rknn'
 
 def export_rknn():
     rknn = RKNN(verbose=True)
