@@ -1,98 +1,113 @@
 import cv2
 from ultralytics import YOLO
 
-# --- ⚙️ CONFIGURATION PARAMETERS ---
-VIDEO_PATH = "videos/cantee.mp4"
+# --- ⚙️ USER CONFIGURATION ---
+VIDEO_PATH = "videos/canteen.mp4"
 MODEL_PATH = "runs/detect/aiv6s1/weights/best.pt"
 
-# Detection Settings
-CONF_THRESHOLD = 0.50   # Confidence required to see an object (0.0 - 1.0)
-IOU_THRESHOLD = 0.45    # Overlap required to filter duplicates (0.0 - 1.0)
-IMAGE_SIZE = 640        # Inference resolution (640 is standard)
+# Initial Detection Settings
+CONF_THRESHOLD = 0.50
+IOU_THRESHOLD = 0.45
 
-# Playback Settings
-PLAYBACK_SPEED = 1.0    # 1.0 = Normal, 0.5 = Slow Motion, 2.0 = Fast Forward
-WINDOW_NAME = "YOLOv8 Detection Player"
-# -----------------------------------
+# Initial Playback Settings
+PLAYBACK_SPEED = 1.0     # 1.0 = Normal, 0.5 = Slow, 2.0 = Fast
+WINDOW_NAME = "Linux AI Player"
+# -----------------------------
 
 def main():
-    # 1. Load the Model
-    print(f"🚀 Loading model from: {MODEL_PATH}")
-    try:
-        model = YOLO(MODEL_PATH)
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        return
+    # 1. Load Model
+    print(f"🚀 Loading model: {MODEL_PATH}")
+    model = YOLO(MODEL_PATH)
 
     # 2. Open Video
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
-        print(f"❌ Error: Could not open video file {VIDEO_PATH}")
+        print(f"❌ Error: Cannot open {VIDEO_PATH}")
         return
 
-    # Get video properties for accurate timing
+    # Video properties
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0: fps = 30 # Fallback if FPS is missing
-    
-    # Calculate delay per frame (in milliseconds)
-    # If speed is 1.0, delay is 1000/fps. If speed is 0.5, delay is doubled.
-    frame_delay = int((1000 / fps) / PLAYBACK_SPEED)
-    if frame_delay < 1: frame_delay = 1
+    if fps == 0: fps = 30
+    base_delay = int(1000 / fps)
 
-    print(f"▶️  Video Playing. Controls:")
-    print(f"    [SPACE] or [P] : Pause / Resume")
-    print(f"    [Q] or [ESC]   : Quit")
+    print("-" * 50)
+    print("🎮 PLAYER CONTROLS:")
+    print("  [SPACE] : Pause / Resume")
+    print("  [Q]     : Quit")
+    print("  [W]     : Speed UP (+0.5x)")
+    print("  [S]     : Speed DOWN (-0.5x)")
+    print("-" * 50)
 
     paused = False
+    current_speed = PLAYBACK_SPEED
 
     while True:
-        # A. If NOT paused, read and process the next frame
+        # A. Read Frame (Only if not paused)
         if not paused:
             ret, frame = cap.read()
-            
             if not ret:
-                print("✅ Video finished.")
+                print("✅ Video Finished.")
                 break
 
-            # --- RUN DETECTION ---
+            # --- DETECTION ---
             results = model.predict(
                 frame, 
                 conf=CONF_THRESHOLD, 
                 iou=IOU_THRESHOLD, 
-                imgsz=IMAGE_SIZE, 
-                verbose=False # Keep terminal clean
+                imgsz=640, 
+                verbose=False
             )
-
-            # --- DRAW RESULTS ---
-            # .plot() returns a numpy array (image) with boxes drawn
+            
+            # Draw boxes
             annotated_frame = results[0].plot()
 
-            # Show the frame
+            # Add Speed Overlay text
+            cv2.putText(annotated_frame, f"Speed: {current_speed}x", (20, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+            # Show Frame
             cv2.imshow(WINDOW_NAME, annotated_frame)
 
-        # B. Handle Key Presses & Window Events
-        # If paused, wait indefinitely (0) for a key.
-        # If playing, wait for the calculated frame delay.
-        wait_time = 0 if paused else frame_delay
-        
-        key = cv2.waitKey(wait_time) & 0xFF
+        # B. Smart Delay Logic
+        # If paused, wait forever (0) for a key. 
+        # If playing, calculate delay based on speed.
+        if paused:
+            delay = 0
+        else:
+            delay = int(base_delay / current_speed)
+            if delay < 1: delay = 1
 
-        # [Q] or [ESC] to Quit
-        if key == ord('q') or key == 27:
+        # C. Key Handler
+        key = cv2.waitKey(delay) & 0xFF
+
+        # Quit
+        if key == ord('q'):
             break
         
-        # [SPACE] or [P] to Pause/Resume
-        if key == ord(' ') or key == ord('p'):
+        # Pause
+        elif key == ord(' '):
             paused = not paused
-            status = "PAUSED II" if paused else "RESUMED ▶"
-            print(f"Video {status}")
+            state = "PAUSED" if paused else "PLAYING"
+            print(f"⏯  {state}")
 
-        # Check if the window was closed manually using the 'X' button
-        # (This prevents the script from crashing if window is closed)
-        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
-            break
+        # Speed Controls
+        elif key == ord('w'): # Faster
+            current_speed += 0.5
+            print(f"⏩ Speed Up: {current_speed}x")
+        
+        elif key == ord('s'): # Slower
+            if current_speed > 0.5:
+                current_speed -= 0.5
+                print(f"⏪ Speed Down: {current_speed}x")
 
-    # Cleanup
+        # Check if window closed via 'X' button
+        try:
+            if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except Exception:
+            # Handle standard Linux cv2 error on window check
+            pass
+
     cap.release()
     cv2.destroyAllWindows()
 
