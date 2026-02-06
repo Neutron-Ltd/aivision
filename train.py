@@ -24,10 +24,10 @@ def main():
         
         # --- TRAINING DYNAMICS ---
         epochs=300,               # Long training because we turned off aggressive augmentation
-        patience=50,              # Stop if no improvement for 50 epochs
+        patience=0,              # Stop if no improvement for 50 epochs
         imgsz=640,                # Standard resolution
         batch=16,                 # Lower this to 8 or 4 if you get "Out of Memory" errors
-        name='aiv6p_final',       # Output folder name
+        name='aiv6s1',       # Output folder name
         workers=8,                
         device=device,            
         cache=True,               # Loads images into RAM for speed
