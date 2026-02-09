@@ -9,8 +9,8 @@ from threading import Thread
 # ⚙️ USER CONFIGURATION
 # ==============================================================================
 CONFIG = {
-    "video_path": "videos/canteen.mp4",
-    "model_path": "runs/detect/aiv6s1/weights/best.pt",
+    "video_path": "videos/canteen2.mp4",
+    "model_path": "runs/detect/aiv6s2/weights/best.pt",
     
     # Detection Parameters
     "conf": 0.50,
