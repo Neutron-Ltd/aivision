@@ -27,7 +27,7 @@ def main():
         patience=50,              # Stop if no improvement for 50 epochs
         imgsz=640,                # Standard resolution
         batch=64,                 # Lower this to 8 or 4 if you get "Out of Memory" errors
-        name='aiv6s2',       # Output folder name
+        name='aiv6s3',       # Output folder name
         workers=8,                
         device=device,            
         cache=True,               # Loads images into RAM for speed
