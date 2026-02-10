@@ -9,7 +9,7 @@ from tqdm import tqdm  # Library for progress bar
 CONFIG = {
     "video_path": "videos/canteen2.mp4",             # Your input video (converted from .dav)
     "output_path": "videos/canteen2_detected.mp4",   # The result file name
-    "model_path": "runs/detect/aiv6s2/weights/best.pt", # Your trained model
+    "model_path": "runs/detect/aiv6s3/weights/best.pt", # Your trained model
     
     # Detection Parameters
     "conf": 0.45,
