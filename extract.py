@@ -5,8 +5,8 @@ import math
 # ==============================================================================
 # ⚙️ CONFIGURATION
 # ==============================================================================
-VIDEO_PATH = "videos/factory1.mp4"
-OUTPUT_FOLDER = "images/factory1"
+VIDEO_PATH = "videos/test.mp4"
+OUTPUT_FOLDER = "images/test"
 INTERVAL_SECONDS = 1  # How many seconds between each extracted image
 
 def extract_frames():
