@@ -24,7 +24,7 @@ python label/label.py &
 
 # 5. Generate fresh CSV manifest with the ACTIVE IP
 # This fixes the "issue loading URL" error by ensuring links match your current network
-python -c "import os; ip='$CURRENT_IP'; open('label/people.csv', 'w').write('image\n' + '\n'.join([f'http://{ip}:8765/people/{f}' for f in os.listdir('images/people') if f.lower().endswith(('.jpg', '.jpeg', '.png'))]))"
+python -c "import os; ip='$CURRENT_IP'; open('label/canteen3.csv', 'w').write('image\n' + '\n'.join([f'http://{ip}:8765/canteen3/{f}' for f in os.listdir('images/canteen3') if f.lower().endswith(('.jpg', '.jpeg', '.png'))]))"
 
 # 6. Launch Label Studio
 export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
