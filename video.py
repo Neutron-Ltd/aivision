@@ -1,40 +1,16 @@
-import time
-import cv2
+"""Browser-based video player with live YOLOv8 detection and pause/speed controls."""
+
+import argparse
 import logging
-from ultralytics import YOLO
+import os
+import sys
+import threading
+import time
+
+import cv2
 from flask import Flask, Response, render_template_string
-from threading import Thread
+from ultralytics import YOLO
 
-# ==============================================================================
-# ⚙️ USER CONFIGURATION
-# ==============================================================================
-CONFIG = {
-    "video_path": "videos/factory1.mp4",
-    "model_path": "runs/detect/aiv6s3/weights/best.pt",
-    
-    # Detection Parameters
-    "conf": 0.50,
-    "iou": 0.45,
-    "imgsz": 640,
-}
-
-# ==============================================================================
-# 🎮 GLOBAL PLAYER STATE
-# ==============================================================================
-class PlayerState:
-    def __init__(self):
-        self.paused = False
-        self.speed_multiplier = 1.0  # 1.0 = Normal, 0.5 = Slow, 2.0 = Fast
-        self.frame = None
-
-state = PlayerState()
-
-# ==============================================================================
-# 🖥️ FLASK APP & CONTROLS
-# ==============================================================================
-app = Flask(__name__)
-
-# Minimal HTML Interface for Controls
 HTML_TEMPLATE = """
 <html>
 <head>
@@ -45,10 +21,9 @@ HTML_TEMPLATE = """
         .controls { margin-top: 20px; }
         button { padding: 10px 20px; font-size: 16px; margin: 0 10px; cursor: pointer; background: #444; color: white; border: none; border-radius: 5px; }
         button:hover { background: #666; }
-        .active { background: #007bff; }
     </style>
     <script>
-        function sendCmd(cmd) { fetch('/' + cmd); }
+        function sendCmd(cmd) { fetch('/' + cmd, { method: 'POST' }); }
     </script>
 </head>
 <body>
@@ -63,98 +38,101 @@ HTML_TEMPLATE = """
 </html>
 """
 
-@app.route('/')
-def index():
-    return render_template_string(HTML_TEMPLATE)
 
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+class PlayerState:
+    def __init__(self):
+        self.paused = False
+        self.speed_multiplier = 1.0  # 1.0 = normal, 0.5 = slow, 2.0 = fast
+        self.lock = threading.Lock()
 
-# --- CONTROL ENDPOINTS ---
-@app.route('/pause')
-def pause():
-    state.paused = not state.paused
-    return "OK"
 
-@app.route('/faster')
-def faster():
-    state.speed_multiplier = min(state.speed_multiplier + 0.5, 5.0)
-    return "OK"
+def create_app(args):
+    model = YOLO(args.model)  # loaded once and shared by all viewers
+    state = PlayerState()
+    app = Flask(__name__)
 
-@app.route('/slower')
-def slower():
-    state.speed_multiplier = max(state.speed_multiplier - 0.5, 0.1)
-    return "OK"
+    def generate_frames():
+        cap = cv2.VideoCapture(args.video)
+        if not cap.isOpened():
+            print(f"❌ Could not open video: {args.video}")
+            return
+        base_delay = 1.0 / (cap.get(cv2.CAP_PROP_FPS) or 30)
+        last_frame = None
+        try:
+            while True:
+                if state.paused:
+                    # Keep resending the last frame so the image does not break.
+                    if last_frame is not None:
+                        yield last_frame
+                    time.sleep(0.1)
+                    continue
 
-# ==============================================================================
-# 🧠 VIDEO PROCESSING LOOP
-# ==============================================================================
-def generate_frames():
-    # 1. Load Model
-    print(f"🚀 Loading Model: {CONFIG['model_path']}")
-    model = YOLO(CONFIG['model_path'])
+                ret, frame = cap.read()
+                if not ret:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop the video
+                    continue
 
-    # 2. Open Video
-    print(f"📂 Opening Video: {CONFIG['video_path']}")
-    cap = cv2.VideoCapture(CONFIG['video_path'])
-    
-    # Calculate Base Delay (Physics)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0: fps = 30
-    base_delay = 1.0 / fps
+                with state.lock:
+                    results = model.predict(frame, conf=args.conf, iou=args.iou,
+                                            imgsz=args.imgsz, verbose=False)
+                annotated = results[0].plot()
+                cv2.putText(annotated, f"Speed: {state.speed_multiplier}x", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    while True:
-        # A. PAUSE LOGIC
-        if state.paused:
-            # If paused, keep sending the LAST frame so the image doesn't break
-            if state.frame is not None:
-                yield state.frame
-            time.sleep(0.1)
-            continue
+                ok, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                if ok:
+                    last_frame = (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                                  + buffer.tobytes() + b"\r\n")
+                    yield last_frame
 
-        # B. READ FRAME
-        ret, frame = cap.read()
-        if not ret:
-            print("✅ Video Finished. Looping...")
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            continue
+                time.sleep(base_delay / state.speed_multiplier)
+        finally:
+            cap.release()  # runs when the browser disconnects
 
-        # C. INFERENCE
-        results = model.predict(
-            frame, 
-            conf=CONFIG['conf'], 
-            iou=CONFIG['iou'], 
-            imgsz=CONFIG['imgsz'],
-            verbose=False
-        )
+    @app.route("/")
+    def index():
+        return render_template_string(HTML_TEMPLATE)
 
-        # D. DRAWING
-        annotated_frame = results[0].plot()
+    @app.route("/video_feed")
+    def video_feed():
+        return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
-        # Add HUD (Speed Status)
-        cv2.putText(annotated_frame, f"Speed: {state.speed_multiplier}x", (20, 40), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    @app.route("/pause", methods=["POST"])
+    def pause():
+        state.paused = not state.paused
+        return "OK"
 
-        # E. ENCODE FOR WEB
-        ret, buffer = cv2.imencode('.jpg', annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-        if ret:
-            state.frame = (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            yield state.frame
+    @app.route("/faster", methods=["POST"])
+    def faster():
+        state.speed_multiplier = min(state.speed_multiplier + 0.5, 5.0)
+        return "OK"
 
-        # F. SPEED CONTROL (Sleep logic)
-        # Higher multiplier = Less sleep = Faster
-        # Lower multiplier = More sleep = Slower
-        time.sleep(base_delay / state.speed_multiplier)
+    @app.route("/slower", methods=["POST"])
+    def slower():
+        state.speed_multiplier = max(state.speed_multiplier - 0.5, 0.1)
+        return "OK"
+
+    return app
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("video", nargs="?", default="videos/factory1.mp4", help="input video (default: %(default)s)")
+    p.add_argument("-m", "--model", default="runs/detect/aiv6s3/weights/best.pt", help="trained weights")
+    p.add_argument("--conf", type=float, default=0.50, help="confidence threshold")
+    p.add_argument("--iou", type=float, default=0.45, help="NMS IoU threshold")
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind address; use 0.0.0.0 to allow other machines (default: %(default)s)")
+    p.add_argument("--port", type=int, default=8890)
+    return p.parse_args()
+
 
 if __name__ == "__main__":
-    # Disable Flask logs to keep terminal clean
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    
-    print("\n✅ PLAYER READY!")
-    print("   👉 Open this URL in your browser: http://localhost:8890")
-    print("   (Or use your server IP: http://<server_ip>:8890)\n")
-    
-    app.run(host='0.0.0.0', port=8890, threaded=True)
+    args = parse_args()
+    if not os.path.exists(args.video):
+        sys.exit(f"❌ Video not found: {args.video}")
+    app = create_app(args)
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    print(f"✅ Player ready: http://{'localhost' if args.host in ('127.0.0.1', '0.0.0.0') else args.host}:{args.port}")
+    app.run(host=args.host, port=args.port, threaded=True)

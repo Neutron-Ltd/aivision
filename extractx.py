@@ -1,91 +1,76 @@
-import cv2
+"""Extract frames around a specific timestamp, e.g. to collect hard examples."""
+
+import argparse
 import os
+import sys
 
-# ==============================================================================
-# ⚙️ CONFIGURATION
-# ==============================================================================
-VIDEO_PATH = "videos/canteen2.mp4"       # Path to your video
-OUTPUT_FOLDER = "images/canteen3"        # Output folder
-TARGET_TIME = "28:42"                    # Format -> "MM:SS" (Minutes:Seconds)
+import cv2
 
-# Extraction Settings
-CONTEXT_SECONDS = 2      # Capture 1 second before and 1 second after
-EXTRACT_FPS = 5          # Capture 5 frames per second (Interval)
 
 def time_to_seconds(time_str):
-    """Converts 'MM:SS' string to total seconds."""
+    """Convert 'MM:SS' or 'HH:MM:SS' to seconds."""
     try:
-        minutes, seconds = map(int, time_str.split(':'))
-        return (minutes * 60) + seconds
+        parts = [int(p) for p in time_str.split(":")]
     except ValueError:
-        print(f"❌ Error: Invalid time format '{time_str}'. Use 'MM:SS'")
-        return None
+        parts = []
+    if len(parts) not in (2, 3) or any(p < 0 for p in parts):
+        raise argparse.ArgumentTypeError(f"invalid time '{time_str}', use MM:SS or HH:MM:SS")
+    seconds = 0
+    for p in parts:
+        seconds = seconds * 60 + p
+    return seconds
 
-def extract_from_timestamp():
-    # 1. Setup Video
-    if not os.path.exists(VIDEO_PATH):
-        print(f"❌ Error: Video not found at {VIDEO_PATH}")
-        return
 
-    cap = cv2.VideoCapture(VIDEO_PATH)
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("time", nargs="?", default="28:42", help="target timestamp MM:SS (default: %(default)s)")
+    p.add_argument("-v", "--video", default="videos/canteen2.mp4", help="input video (default: %(default)s)")
+    p.add_argument("-o", "--output", default="images/canteen3", help="output folder (default: %(default)s)")
+    p.add_argument("-c", "--context", type=float, default=2.0,
+                   help="seconds to capture before and after the timestamp (default: %(default)s)")
+    p.add_argument("-r", "--rate", type=float, default=5.0,
+                   help="frames per second to capture (default: %(default)s)")
+    return p.parse_args()
+
+
+def extract_from_timestamp(args):
+    try:
+        target_seconds = time_to_seconds(args.time)
+    except argparse.ArgumentTypeError as e:
+        sys.exit(f"❌ {e}")
+    if args.rate <= 0 or args.context < 0:
+        sys.exit("❌ --rate must be > 0 and --context must be >= 0")
+    if not os.path.exists(args.video):
+        sys.exit(f"❌ Video not found: {args.video}")
+
+    cap = cv2.VideoCapture(args.video)
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    if fps == 0:
-        print("❌ Error: Could not detect Video FPS.")
-        return
-
-    # 2. Calculate Target Frame
-    target_seconds = time_to_seconds(TARGET_TIME)
-    if target_seconds is None: return
+    if not fps:
+        sys.exit("❌ Could not detect video FPS.")
 
     center_frame = int(target_seconds * fps)
-    
-    print(f"⏱️  Target Time: {TARGET_TIME} ({target_seconds}s)")
-    print(f"🎯 Center Frame: {center_frame}")
-    print(f"ℹ️  Video FPS: {fps}")
+    step_size = max(1, int(fps / args.rate))
+    frames_per_side = int(args.rate * args.context)
+    indices = [center_frame + i * step_size for i in range(-frames_per_side, frames_per_side + 1)]
 
-    # 3. Calculate Steps
-    # To get 5 images in 1 second, we skip (FPS / 5) frames
-    step_size = int(fps / EXTRACT_FPS)
-    if step_size < 1: step_size = 1
+    os.makedirs(args.output, exist_ok=True)
+    print(f"📸 Capturing up to {len(indices)} frames around {args.time} (frame {center_frame})")
 
-    # How many frames total to grab? (5 frames * number of seconds)
-    frames_per_side = int(EXTRACT_FPS * CONTEXT_SECONDS)
-
-    # 4. Prepare Output Folder
-    if not os.path.exists(OUTPUT_FOLDER):
-        os.makedirs(OUTPUT_FOLDER)
-
-    # 5. Generate List of Frames to Capture
-    # Range: -5 to +5 steps
-    indices_to_grab = []
-    for i in range(-frames_per_side, frames_per_side + 1):
-        offset = i * step_size
-        indices_to_grab.append(center_frame + offset)
-
-    print(f"📸 Capturing {len(indices_to_grab)} frames around {TARGET_TIME}...")
-
-    # 6. Extract Loop
-    saved_count = 0
-    clean_time_name = TARGET_TIME.replace(":", "-") # "10:56" -> "10-56"
-
-    for i, frame_idx in enumerate(indices_to_grab):
-        if frame_idx < 0 or frame_idx >= total_frames:
-            continue # Skip out of bounds
-
+    clean_time = args.time.replace(":", "-")  # "10:56" -> "10-56"
+    saved = 0
+    for i, frame_idx in enumerate(indices):
+        if not 0 <= frame_idx < total_frames:
+            continue
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
-
         if ret:
-            # Name: 10-56_01.jpg, 10-56_02.jpg ...
-            filename = f"{OUTPUT_FOLDER}/{clean_time_name}_{i+1:02d}.jpg"
-            cv2.imwrite(filename, frame)
-            print(f"   ✅ Saved: {filename}")
-            saved_count += 1
+            cv2.imwrite(os.path.join(args.output, f"{clean_time}_{i + 1:02d}.jpg"), frame)
+            saved += 1
 
     cap.release()
-    print(f"\n🎉 Done! {saved_count} images saved to '{OUTPUT_FOLDER}'")
+    print(f"🎉 {saved} images saved to '{args.output}'")
+
 
 if __name__ == "__main__":
-    extract_from_timestamp()
+    extract_from_timestamp(parse_args())

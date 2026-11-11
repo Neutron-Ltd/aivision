@@ -1,62 +1,52 @@
-import cv2
+"""Extract frames from a video at a fixed time interval (e.g. one per second)."""
+
+import argparse
 import os
-import math
+import sys
 
-# ==============================================================================
-# ⚙️ CONFIGURATION
-# ==============================================================================
-VIDEO_PATH = "videos/test.mp4"
-OUTPUT_FOLDER = "images/test"
-INTERVAL_SECONDS = 1  # How many seconds between each extracted image
+import cv2
 
-def extract_frames():
-    # 1. Verify Video Exists
-    if not os.path.exists(VIDEO_PATH):
-        print(f"❌ Error: Video file not found at {VIDEO_PATH}")
-        return
 
-    # 2. Create Output Folder
-    if not os.path.exists(OUTPUT_FOLDER):
-        os.makedirs(OUTPUT_FOLDER)
-        print(f"📂 Created folder: {OUTPUT_FOLDER}")
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("video", nargs="?", default="videos/test.mp4", help="input video (default: %(default)s)")
+    p.add_argument("-o", "--output", default="images/test", help="output folder (default: %(default)s)")
+    p.add_argument("-i", "--interval", type=float, default=1.0,
+                   help="seconds between extracted frames (default: %(default)s)")
+    return p.parse_args()
 
-    # 3. Load Video
-    cap = cv2.VideoCapture(VIDEO_PATH)
-    fps = cap.get(cv2.CAP_PROP_FPS)       # Frames per second
+
+def extract_frames(args):
+    if not os.path.exists(args.video):
+        sys.exit(f"❌ Video file not found: {args.video}")
+    if args.interval <= 0:
+        sys.exit("❌ --interval must be greater than 0")
+
+    cap = cv2.VideoCapture(args.video)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps:
+        sys.exit("❌ Could not read FPS from video.")
+    os.makedirs(args.output, exist_ok=True)
+
+    # At least one frame apart, so very short intervals keep every frame.
+    frames_to_skip = max(1, round(fps * args.interval))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    if fps == 0:
-        print("❌ Error: Could not read FPS from video.")
-        return
+    print(f"ℹ️  {fps:.2f} FPS, {total_frames} frames; saving every {frames_to_skip} frames")
 
-    # Calculate frames to skip (e.g., if FPS is 30, skip 30 frames for 1 sec)
-    frames_to_skip = int(fps * INTERVAL_SECONDS)
-    
-    print(f"ℹ️  Video FPS: {fps}")
-    print(f"ℹ️  Total Frames: {total_frames}")
-    print(f"ℹ️  Extracting every {frames_to_skip} frames ({INTERVAL_SECONDS}s interval)")
-
-    count = 0
-    saved_count = 0
-
+    count = saved = 0
     while True:
         ret, frame = cap.read()
-        
         if not ret:
-            break  # End of video
-
-        # Only save if the current frame count is a multiple of our interval
+            break
         if count % frames_to_skip == 0:
-            # Create filename (e.g., frame_001.jpg)
-            filename = f"{OUTPUT_FOLDER}/frame_{saved_count:04d}.jpg"
+            filename = os.path.join(args.output, f"frame_{saved:04d}.jpg")
             cv2.imwrite(filename, frame)
-            print(f"   Saved: {filename}")
-            saved_count += 1
-
+            saved += 1
         count += 1
 
     cap.release()
-    print(f"\n✅ Done! Extracted {saved_count} images to '{OUTPUT_FOLDER}'")
+    print(f"✅ Extracted {saved} images to '{args.output}'")
+
 
 if __name__ == "__main__":
-    extract_frames()
+    extract_frames(parse_args())

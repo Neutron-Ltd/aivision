@@ -1,67 +1,89 @@
+"""Train a YOLOv8 person detector tuned for top-down (overhead) camera views."""
+
+import argparse
+
 import torch
 from ultralytics import YOLO
 
-def main():
-    # 0. Hardware Check
+
+def pick_device():
     if torch.cuda.is_available():
         print(f"🚀 Training on GPU: {torch.cuda.get_device_name(0)}")
-        device = 0
-    elif torch.backends.mps.is_available():
+        return 0
+    if torch.backends.mps.is_available():
         print("🚀 Training on Apple Silicon (MPS)")
-        device = 'mps'
-    else:
-        print("⚠️ Training on CPU (This will be slow)")
-        device = 'cpu'
+        return "mps"
+    print("⚠️ Training on CPU (This will be slow)")
+    return "cpu"
 
-    # 1. Initialize Model
-    # We use 'Medium' (m). It is the sweet spot for 1500+ images.
-    # If your GPU runs out of memory, switch to 'yolov8s.pt'.
-    model = YOLO('yolov8n.pt')  # downloaded automatically by ultralytics
 
-    # 2. The "Purist" Training Configuration
-    results = model.train(
-        data='dataset/data.yaml', 
-        
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--data", default="dataset/data.yaml", help="dataset YAML (default: %(default)s)")
+    p.add_argument("--model", default="yolov8n.pt",
+                   help="base weights; downloaded automatically if missing (default: %(default)s)")
+    p.add_argument("--name", default="aiv6s5", help="run name under runs/detect/ (default: %(default)s)")
+    p.add_argument("--epochs", type=int, default=300)
+    p.add_argument("--patience", type=int, default=50, help="early-stopping patience in epochs")
+    p.add_argument("--batch", type=int, default=64, help="lower to 8 or 16 on out-of-memory errors")
+    p.add_argument("--imgsz", type=int, default=640)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--device", default=None, help="e.g. 0, cpu or mps (default: auto-detect)")
+    p.add_argument("--no-export", action="store_true", help="skip ONNX export after training")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    device = args.device if args.device is not None else pick_device()
+
+    # yolov8n is small enough for edge NPUs; use yolov8s/m for more accuracy.
+    model = YOLO(args.model)
+
+    model.train(
+        data=args.data,
+
         # --- TRAINING DYNAMICS ---
-        epochs=300,               # Long training because we turned off aggressive augmentation
-        patience=50,              # Stop if no improvement for 50 epochs
-        imgsz=640,                # Standard resolution
-        batch=64,                 # Lower this to 8 or 4 if you get "Out of Memory" errors
-        name='aiv6s5',       # Output folder name
-        workers=8,                
-        device=device,            
-        cache=True,               # Loads images into RAM for speed
-        exist_ok=True,            # Overwrite existing folder if needed
-        amp=False,                # False = More stable precision (Good for custom datasets)
+        epochs=args.epochs,       # Long training because aggressive augmentation is off
+        patience=args.patience,   # Stop if no improvement for this many epochs
+        imgsz=args.imgsz,
+        batch=args.batch,
+        name=args.name,
+        workers=args.workers,
+        device=device,
+        cache=True,               # Load images into RAM for speed
+        exist_ok=True,            # Reuse the run folder if it exists
+        amp=False,                # Full precision is more stable on small custom datasets
 
         # --- "NO FRAGMENTATION" AUGMENTATIONS ---
-        mosaic=0.0,       # OFF. No chopping. Shows 100% real images only.
+        mosaic=0.0,       # OFF. No chopping; the model only sees whole real frames.
         mixup=0.0,        # OFF. No transparent ghost overlays.
-        
+
         # --- "NO ZOOM" AUGMENTATIONS ---
-        scale=0.1,        # VERY LOW (+/- 10%). Keeps the person the actual size they are on camera.
-                          # We need a tiny bit to handle people slightly closer/further, but no big zooms.
-        
+        scale=0.1,        # +/- 10% keeps people close to their real on-camera size.
+
         # --- TOP-DOWN ESSENTIALS ---
-        degrees=180.0,    # ON. CRITICAL. A person walking South = Person walking North.
-        flipud=0.5,       # ON. Up/Down flip. Doubles your data for top-down views.
-        fliplr=0.5,       # ON. Left/Right flip.
-        
-        # --- COLOR & LIGHTING (The "Hoodie" Fix) ---
-        # We KEEP these to teach the model that "Shape > Color".
-        hsv_h=0.015,      # Slight color shift
-        hsv_s=0.6,        # Moderate saturation shift (Grey vs Red hoodie)
-        hsv_v=0.4,        # Brightness shift (Shadow vs Light)
-        
+        degrees=180.0,    # A person walking south looks like one walking north.
+        flipud=0.5,
+        fliplr=0.5,
+
+        # --- COLOUR & LIGHTING ---
+        # Teach the model that shape matters more than clothing colour.
+        hsv_h=0.015,
+        hsv_s=0.6,
+        hsv_v=0.4,
+
         # --- GEOMETRY ---
-        shear=0.0,        # OFF. Top-down view is flat; no perspective warping needed.
-        perspective=0.0,  # OFF.
-        translate=0.1,    # LOW. Allows slight shifting of the image.
+        shear=0.0,        # Top-down views are flat; no perspective warping needed.
+        perspective=0.0,
+        translate=0.1,
     )
 
-    # 3. Export for Deployment (Optional but Recommended)
-    success = model.export(format='onnx', opset=12)
-    print("🎉 Training & Export Complete!")
+    if not args.no_export:
+        # After training, `model` holds the best checkpoint.
+        model.export(format="onnx", opset=12)
+    print("🎉 Training complete!")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

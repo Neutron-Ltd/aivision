@@ -1,88 +1,66 @@
-import cv2
+"""Run detection on a whole video and save an annotated copy."""
+
+import argparse
 import os
+import sys
+
+import cv2
+from tqdm import tqdm
 from ultralytics import YOLO
-from tqdm import tqdm  # Library for progress bar
 
-# ==============================================================================
-# ⚙️ USER CONFIGURATION
-# ==============================================================================
-CONFIG = {
-    "video_path": "videos/canteen2.mp4",             # Your input video (converted from .dav)
-    "output_path": "videos/canteen2_detected.mp4",   # The result file name
-    "model_path": "runs/detect/aiv6s3/weights/best.pt", # Your trained model
-    
-    # Detection Parameters
-    "conf": 0.45,
-    "iou": 0.45,
-    "imgsz": 640,
-}
 
-def process_video():
-    # 1. Load Model
-    print(f"🚀 Loading Model: {CONFIG['model_path']}")
-    try:
-        model = YOLO(CONFIG['model_path'])
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        return
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("video", nargs="?", default="videos/canteen2.mp4", help="input video (default: %(default)s)")
+    p.add_argument("-o", "--output", help="output video (default: <input>_detected.mp4)")
+    p.add_argument("-m", "--model", default="runs/detect/aiv6s3/weights/best.pt", help="trained weights")
+    p.add_argument("--conf", type=float, default=0.45, help="confidence threshold")
+    p.add_argument("--iou", type=float, default=0.45, help="NMS IoU threshold")
+    p.add_argument("--imgsz", type=int, default=640)
+    return p.parse_args()
 
-    # 2. Open Source Video
-    if not os.path.exists(CONFIG['video_path']):
-        print(f"❌ Error: Input video not found at {CONFIG['video_path']}")
-        return
 
-    cap = cv2.VideoCapture(CONFIG['video_path'])
-    
-    # Get Video Properties
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+def process_video(args):
+    if not os.path.exists(args.video):
+        sys.exit(f"❌ Input video not found: {args.video}")
+    output = args.output or f"{os.path.splitext(args.video)[0]}_detected.mp4"
+
+    print(f"🚀 Loading model: {args.model}")
+    model = YOLO(args.model)
+
+    cap = cv2.VideoCapture(args.video)
+    if not cap.isOpened():
+        sys.exit(f"❌ Could not open video: {args.video}")
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps    = cap.get(cv2.CAP_PROP_FPS)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    if total_frames == 0:
-        print("⚠️ Warning: Could not determine total frames. Progress bar might be inaccurate.")
+    print(f"📂 Processing: {args.video} ({width}x{height} @ {fps:.2f} FPS, "
+          f"{total_frames or 'unknown'} frames)")
 
-    print(f"📂 Processing: {CONFIG['video_path']}")
-    print(f"   ℹ️ Resolution: {width}x{height}")
-    print(f"   ℹ️ FPS: {fps}")
-    print(f"   ℹ️ Total Frames: {total_frames}")
+    # 'mp4v' is widely available; try 'avc1' if the output does not play.
+    out = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not out.isOpened():
+        cap.release()
+        sys.exit(f"❌ Could not create output video: {output}")
 
-    # 3. Setup Video Writer
-    # 'mp4v' is a standard codec. If it fails, try 'avc1'
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-    out = cv2.VideoWriter(CONFIG['output_path'], fourcc, fps, (width, height))
+    # Read until the stream ends rather than trusting the reported frame
+    # count, which is 0 or inaccurate for some containers.
+    with tqdm(total=total_frames or None, unit="frames") as bar:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            results = model.predict(frame, conf=args.conf, iou=args.iou, imgsz=args.imgsz, verbose=False)
+            out.write(results[0].plot())
+            bar.update(1)
 
-    # 4. Processing Loop
-    print("\n🎥 Starting Inference & Saving...")
-    
-    # Wrap loop in tqdm for a progress bar
-    for _ in tqdm(range(total_frames), unit="frames"):
-        ret, frame = cap.read()
-        if not ret:
-            break # End of video
-
-        # A. Run Inference
-        results = model.predict(
-            frame, 
-            conf=CONFIG['conf'], 
-            iou=CONFIG['iou'], 
-            imgsz=CONFIG['imgsz'],
-            verbose=False
-        )
-
-        # B. Draw Bounding Boxes
-        # plot() creates a new image with the boxes drawn
-        annotated_frame = results[0].plot()
-
-        # C. Write to Output Video
-        out.write(annotated_frame)
-
-    # 5. Cleanup
     cap.release()
     out.release()
-    print(f"\n✅ Done! Saved to: {CONFIG['output_path']}")
-    print("   (You can now download this file to your computer to view it)")
+    print(f"✅ Saved to: {output}")
+
 
 if __name__ == "__main__":
-    # Ensure tqdm is installed: pip install tqdm
-    process_video()
+    process_video(parse_args())
