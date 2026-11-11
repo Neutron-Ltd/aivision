@@ -1,59 +1,48 @@
-1. Nuke the Zombies
-Before starting a new session, clear the ports so you don't get "Address already in use" errors.
+# Labelling with Label Studio
 
-Bash
-kill -9 $(lsof -ti:8765,9090,8080) 2>/dev/null
-2. Boot the Image Server (Terminal 1)
-This hosts your local files with wide-open CORS so the browser doesn't block them.
+The trained model pre-annotates images in [Label Studio](https://labelstud.io), so you only correct boxes instead of drawing them all.
 
-Activate your .venv.
+## Requirements
 
-Run the custom server:
+```bash
+pip install label-studio label-studio-ml
+```
 
-Bash
-python cors_server.py
-3. Boot the ML Backend (Terminal 2)
-This runs the YOLOv8 inference engine.
+## Start everything
 
-Activate your .venv.
+From the repository root:
 
-Run the barebones model script:
+```bash
+label/start.sh <folder>      # serves images/<folder>, e.g. label/start.sh people
+```
 
-Bash
-python label.py
-4. Boot Label Studio (Terminal 3)
-This runs the UI.
+This starts:
 
-Activate your .venv.
+| Service | Port | Purpose |
+|---------|------|---------|
+| `label/server.py` | 8765 | Serves `images/` with CORS so the browser can load them |
+| `label/label.py` | 9090 | ML backend that returns YOLO predictions |
+| Label Studio | 8080 | Labelling UI |
 
-Force the local files flag and launch:
+It also writes `label/<folder>.csv`, an import file whose image URLs use your current IP.
 
-Bash
-export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
-label-studio start
-5. Generate the Import Payload
-Run this one-liner anywhere to build a properly formatted CSV. Swap people2 if you change your target directory.
+To use different weights, set `MODEL_PATH` before starting, e.g. `MODEL_PATH=runs/detect/aiv6s5/weights/best.pt label/start.sh people`.
 
-Bash
-python -c "import os; open('import.csv', 'w').write('image\n' + '\n'.join([f'http://<your-ip>:8765/people2/{f}' for f in os.listdir('images/people2') if f.lower().endswith(('.jpg', '.jpeg', '.png'))]))"
-6. The UI Configuration
-Open http://localhost:8080.
+## Configure the project (first time)
 
-Create a Project.
+1. Open http://localhost:8080 and create a project.
+2. **Settings → Labeling Interface → Code**, paste:
 
-Navigate to Settings > Labeling Interface > Code and paste the XML:
+   ```xml
+   <View>
+     <Image name="image" value="$image"/>
+     <RectangleLabels name="label" toName="image">
+       <Label value="person" background="red"/>
+     </RectangleLabels>
+   </View>
+   ```
 
-XML
-<View>
-  <Image name="image" value="$image"/>
-  <RectangleLabels name="label" toName="image">
-    <Label value="person" background="red"/>
-  </RectangleLabels>
-</View>
-Navigate to Settings > Machine Learning.
+3. **Settings → Model**: add `http://<your-ip>:9090`, turn on interactive pre-annotations, then validate and save.
+4. On the project dashboard, **Import** `label/<folder>.csv`.
 
-Add Model: http://<your-ip>:9090.
-
-Toggle Interactive preannotations ON, then hit Validate and Save.
-
-Go to the project dashboard, click Import, and upload your import.csv.
+Export the finished labels in YOLO format to build your `dataset/`.
