@@ -8,12 +8,27 @@ This project trains a YOLOv8 model to detect people from a **top-down perspectiv
 
 ## dataset
 
-- **Source**: custom top-down person dataset
-- **Classes**: 1 (person)
-- **Images**: ~2,400 (train/valid/test split)
-- **Format**: YOLOv8, 640×640
+The dataset, videos and trained weights are **not included** in this repository. Bring your own top-down footage and labels in YOLOv8 format:
 
-Dataset config: `dataset/data.yaml`
+```
+dataset/
+  data.yaml
+  train/images  train/labels
+  valid/images  valid/labels
+  test/images   test/labels
+```
+
+Example `dataset/data.yaml`:
+
+```yaml
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+nc: 1
+names: ['person']
+```
+
+`label/` contains a Label Studio setup (`start.sh`) that pre-annotates images with a trained model.
 
 ## project structure
 
@@ -90,5 +105,5 @@ Detection parameters (in `record.py` and `video.py`):
 
 ## model paths
 
-- Default trained model: `runs/detect/aiv6s3/weights/best.pt`
+- Trained model: `runs/detect/<name>/weights/best.pt` (scripts default to `aiv6s3`/`aiv6s5`; edit `model_path` to match your run)
 - ONNX export from `train.py`: `runs/detect/<name>/weights/best.onnx`

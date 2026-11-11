@@ -3,3 +3,16 @@ venv
 .venv
 logs.txt
 __pycache__
+# Data and artifacts (never commit footage, datasets or weights)
+dataset/
+dataset2/
+images/
+videos/
+runs/
+models/
+label/*.csv
+*.pt
+*.onnx
+*.rknn
+*.mp4
+*.cache

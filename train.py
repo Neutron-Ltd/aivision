@@ -16,7 +16,7 @@ def main():
     # 1. Initialize Model
     # We use 'Medium' (m). It is the sweet spot for 1500+ images.
     # If your GPU runs out of memory, switch to 'yolov8s.pt'.
-    model = YOLO('models/yolov8n.pt') 
+    model = YOLO('yolov8n.pt')  # downloaded automatically by ultralytics
 
     # 2. The "Purist" Training Configuration
     results = model.train(
