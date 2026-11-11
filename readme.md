@@ -1,14 +1,28 @@
 # aivision6s
 
-Top-down human detection using YOLOv8, optimized for overhead camera views (canteens, factory floors, etc.).
+Top-down person detection with YOLOv8, tuned for overhead camera views such as canteens and factory floors, with export to the Rockchip RK3588 NPU.
 
-## overview
+## Overview
 
-This project trains a YOLOv8 model to detect people from a **top-down perspective**. The dataset and augmentations are tailored for overhead footage where orientation and scale matter differently than in side-view surveillance.
+Most person detectors are trained on side-view footage. From directly above, people look like heads and shoulders, can face any direction, and stay roughly the same size. This project trains YOLOv8 for that view:
 
-## dataset
+- 180° rotation and vertical/horizontal flips, because orientation carries no meaning from above
+- Mosaic, mixup, shear and perspective turned off, so the model sees whole, undistorted frames
+- Little scale jitter, so people stay close to their real on-camera size
+- Colour jitter, so the model learns shape rather than clothing colour
 
-The dataset, videos and trained weights are **not included** in this repository. Bring your own top-down footage and labels in YOLOv8 format:
+## Setup
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`export.py` also needs [`rknn-toolkit2`](https://github.com/airockchip/rknn-toolkit2), and the labelling tools need `label-studio` and `label-studio-ml`.
+
+## Dataset
+
+The dataset, videos and trained weights are **not included**. Bring your own top-down footage and labels in YOLOv8 format:
 
 ```
 dataset/
@@ -28,82 +42,66 @@ nc: 1
 names: ['person']
 ```
 
-`label/` contains a Label Studio setup (`start.sh`) that pre-annotates images with a trained model.
+## Workflow
 
-## project structure
+Every script has `--help`. Defaults point at `videos/`, `images/` and `runs/`.
+
+### 1. Extract frames from video
+
+```bash
+python extract.py videos/site.mp4 -o images/site -i 1        # one frame per second
+python extractx.py 28:42 -v videos/site.mp4 -o images/hard   # frames around a timestamp
+```
+
+### 2. Label
+
+`label/` runs Label Studio with a backend that pre-annotates images with your current model. See [label/label.md](label/label.md).
+
+```bash
+label/start.sh site     # serves images/site
+```
+
+### 3. Train
+
+```bash
+python train.py --name myrun                    # yolov8n, 300 epochs, ONNX export
+python train.py --model yolov8s.pt --batch 16   # larger model, less memory
+```
+
+The device (CUDA, Apple MPS or CPU) is selected automatically. Output goes to `runs/detect/<name>/weights/best.pt` and `best.onnx`.
+
+### 4. Run on video
+
+```bash
+# Save an annotated copy
+python record.py videos/site.mp4 -m runs/detect/myrun/weights/best.pt
+
+# Watch in the browser with pause and speed controls at http://localhost:8890
+python video.py videos/site.mp4 -m runs/detect/myrun/weights/best.pt
+```
+
+`video.py` listens on `127.0.0.1` only. Pass `--host 0.0.0.0` to allow other machines on your network.
+
+Detection options: `--conf` (confidence, default 0.45–0.50), `--iou` (NMS IoU, default 0.45), `--imgsz` (default 640).
+
+### 5. Export for RK3588
+
+```bash
+python export.py runs/detect/myrun/weights/best.onnx    # writes best.rknn (FP16)
+```
+
+## Project structure
 
 | File | Purpose |
 |------|---------|
-| `extract.py` | Extract frames from video at fixed intervals (e.g. 1 per second) |
-| `extractx.py` | Extract frames around a specific timestamp (MM:SS) with context |
-| `train.py` | Train YOLOv8 on the dataset with top-down augmentations |
-| `record.py` | Run detection on a full video and save an annotated output |
-| `video.py` | Flask web player with live detection, pause, and speed controls |
-| `export.py` | Export ONNX to RKNN for Rockchip RK3588 NPU deployment |
+| `extract.py` | Extract frames from a video at a fixed interval |
+| `extractx.py` | Extract frames around a timestamp |
+| `train.py` | Train YOLOv8 with top-down augmentations |
+| `record.py` | Save an annotated detection video |
+| `video.py` | Browser player with live detection |
+| `export.py` | Convert ONNX to RKNN for the RK3588 NPU |
+| `label/` | Label Studio pre-annotation setup |
 
-## setup
+## License
 
-```bash
-pip install ultralytics opencv-python flask torch tqdm
-# For RKNN export: pip install rknn-toolkit2
-```
-
-## usage
-
-### 1. extract frames from video
-
-```bash
-# Edit extract.py: VIDEO_PATH, OUTPUT_FOLDER, INTERVAL_SECONDS
-python extract.py
-
-# Or around a specific timestamp (extractx.py)
-# Edit: VIDEO_PATH, OUTPUT_FOLDER, TARGET_TIME (MM:SS)
-python extractx.py
-```
-
-### 2. train model
-
-```bash
-python train.py
-```
-
-Outputs to `runs/detect/<name>/weights/best.pt`. Uses GPU/MPS if available, otherwise CPU. Top-down augmentations include `flipud`, `fliplr`, and `degrees=180`.
-
-### 3. process video (save annotated output)
-
-```bash
-# Edit record.py: video_path, output_path, model_path
-python record.py
-```
-
-### 4. web player (live detection)
-
-```bash
-# Edit video.py: video_path, model_path
-python video.py
-# Open http://localhost:8890
-```
-
-Pause, slow down, and speed up playback in the browser.
-
-### 5. export for edge (RK3588)
-
-```bash
-# Edit export.py: ONNX_MODEL path
-python export.py
-```
-
-Produces an `.rknn` file for Rockchip RK3588 NPU inference.
-
-## configuration
-
-Detection parameters (in `record.py` and `video.py`):
-
-- `conf`: confidence threshold (default 0.45–0.50)
-- `iou`: NMS IoU threshold (default 0.45)
-- `imgsz`: input size (default 640)
-
-## model paths
-
-- Trained model: `runs/detect/<name>/weights/best.pt` (scripts default to `aiv6s3`/`aiv6s5`; edit `model_path` to match your run)
-- ONNX export from `train.py`: `runs/detect/<name>/weights/best.onnx`
+[AGPL-3.0](LICENSE). This project builds on [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics), which is also AGPL-3.0.

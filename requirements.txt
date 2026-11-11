@@ -1,0 +1,10 @@
+ultralytics>=8.0
+torch
+opencv-python
+flask
+tqdm
+
+# Optional
+# rknn-toolkit2              # export.py: RKNN conversion (Linux x86_64 only)
+# label-studio               # label/: labelling UI
+# label-studio-ml            # label/: pre-annotation backend
